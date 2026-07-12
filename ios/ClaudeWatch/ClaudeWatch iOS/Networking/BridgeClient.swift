@@ -34,8 +34,9 @@ final class BridgeClient {
 
     init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10
-        config.timeoutIntervalForResource = 30
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 120
+        config.waitsForConnectivity = true
         self.session = URLSession(configuration: config)
 
         // Restore saved token
@@ -49,8 +50,21 @@ final class BridgeClient {
 
     func configure(host: String, port: UInt16) {
         let urlString = "http://\(host):\(port)"
-        self.baseURL = URL(string: urlString)
-        UserDefaults.standard.set(urlString, forKey: "bridge_url")
+        configure(urlString: urlString)
+    }
+
+    /// Full URL: `http://192.168.1.4:7860`, `https://mac.tail123.ts.net`, Tailscale, Cloudflare tunnel, etc.
+    func configure(urlString: String) {
+        guard let parsed = BridgeURLParser.parse(urlString) else { return }
+        self.baseURL = parsed.baseURL
+        UserDefaults.standard.set(parsed.baseURL.absoluteString, forKey: "bridge_url")
+        UserDefaults.standard.set(parsed.usesTLS, forKey: "bridge_uses_tls")
+    }
+
+    func configure(parsed: BridgeURLParser.ParsedBridge) {
+        self.baseURL = parsed.baseURL
+        UserDefaults.standard.set(parsed.baseURL.absoluteString, forKey: "bridge_url")
+        UserDefaults.standard.set(parsed.usesTLS, forKey: "bridge_uses_tls")
     }
 
     var isPaired: Bool {

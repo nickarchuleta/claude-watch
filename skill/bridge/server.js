@@ -1514,15 +1514,39 @@ async function startServer() {
     if (lanIP !== "127.0.0.1") break;
   }
 
+  let tailscaleIP = null;
+  let tailscaleDNS = null;
+  try {
+    tailscaleIP = execSync("tailscale ip -4 2>/dev/null", { encoding: "utf-8" }).trim() || null;
+  } catch { /* optional */ }
+  try {
+    const statusJson = execSync("tailscale status --json 2>/dev/null", { encoding: "utf-8" });
+    const status = JSON.parse(statusJson);
+    tailscaleDNS = status?.Self?.DNSName?.replace(/\.$/, "") || null;
+  } catch { /* optional */ }
+
   const agentLine = agents.length ? agents.join(" + ") : "none";
   console.log("");
   console.log("╔═══════════════════════════════════════╗");
   console.log("║        AGENT WATCH BRIDGE             ║");
   console.log("╠═══════════════════════════════════════╣");
   console.log(`║  Pairing Code:  ${code}                ║`);
-  console.log(`║  IP Address:    ${lanIP.padEnd(20)}║`);
+  console.log(`║  LAN IP:        ${lanIP.padEnd(20)}║`);
   console.log(`║  Port:          ${String(boundPort).padEnd(20)}║`);
+  if (tailscaleIP) {
+    console.log(`║  Tailscale IP:  ${tailscaleIP.padEnd(20)}║`);
+  }
+  if (tailscaleDNS) {
+    const remoteHint = `https://${tailscaleDNS}`;
+    console.log(`║  Remote URL:    ${remoteHint.slice(0, 20).padEnd(20)}║`);
+    if (remoteHint.length > 20) {
+      console.log(`║                 ${remoteHint.slice(20).padEnd(20)}║`);
+    }
+  }
   console.log(`║  Agents:        ${agentLine.padEnd(20)}║`);
+  console.log("╠═══════════════════════════════════════╣");
+  console.log("║  Remote: skill/start-remote.sh        ║");
+  console.log("║  Watch:  pair iPhone, use Via iPhone   ║");
   console.log("╚═══════════════════════════════════════╝");
   console.log("");
 

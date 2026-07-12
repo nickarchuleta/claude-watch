@@ -10,6 +10,7 @@ enum WatchMessage: Codable {
     // Watch -> iPhone
     case voiceCommand(VoiceCommand)
     case approvalResponse(ApprovalResponse)
+    case approvalOptionResponse(ApprovalOptionResponse)
 
     // iPhone -> Watch
     case terminalUpdate(TerminalUpdate)
@@ -40,6 +41,31 @@ enum WatchMessage: Codable {
         init(requestId: UUID, approved: Bool) {
             self.requestId = requestId
             self.approved = approved
+            self.timestamp = Date()
+        }
+    }
+
+    /// Relay-mode approval with dynamic options (permissionId from bridge).
+    struct ApprovalOptionResponse: Codable {
+        let permissionId: String
+        let optionLabel: String
+        let optionIndex: Int
+        let optionCount: Int
+        let question: String?
+        let timestamp: Date
+
+        init(
+            permissionId: String,
+            optionLabel: String,
+            optionIndex: Int,
+            optionCount: Int,
+            question: String?
+        ) {
+            self.permissionId = permissionId
+            self.optionLabel = optionLabel
+            self.optionIndex = optionIndex
+            self.optionCount = optionCount
+            self.question = question
             self.timestamp = Date()
         }
     }
@@ -83,8 +109,9 @@ enum WatchMessage: Codable {
 
     private var typeIdentifier: String {
         switch self {
-        case .voiceCommand:           return "voiceCommand"
-        case .approvalResponse:       return "approvalResponse"
+        case .voiceCommand:              return "voiceCommand"
+        case .approvalResponse:          return "approvalResponse"
+        case .approvalOptionResponse:    return "approvalOptionResponse"
         case .terminalUpdate:         return "terminalUpdate"
         case .approvalRequestMessage: return "approvalRequestMessage"
         case .sessionStateUpdate:     return "sessionStateUpdate"
@@ -132,6 +159,8 @@ enum WatchMessage: Codable {
             try container.encode(cmd, forKey: .payload)
         case .approvalResponse(let resp):
             try container.encode(resp, forKey: .payload)
+        case .approvalOptionResponse(let resp):
+            try container.encode(resp, forKey: .payload)
         case .terminalUpdate(let update):
             try container.encode(update, forKey: .payload)
         case .approvalRequestMessage(let req):
@@ -154,6 +183,8 @@ enum WatchMessage: Codable {
             self = .voiceCommand(try container.decode(VoiceCommand.self, forKey: .payload))
         case "approvalResponse":
             self = .approvalResponse(try container.decode(ApprovalResponse.self, forKey: .payload))
+        case "approvalOptionResponse":
+            self = .approvalOptionResponse(try container.decode(ApprovalOptionResponse.self, forKey: .payload))
         case "terminalUpdate":
             self = .terminalUpdate(try container.decode(TerminalUpdate.self, forKey: .payload))
         case "approvalRequestMessage":

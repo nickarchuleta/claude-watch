@@ -67,10 +67,13 @@ final class BonjourDiscovery: ObservableObject {
 
     /// Tries to connect to a specific IP on ports 7860-7869.
     func discoverAtIP(_ ip: String) async throws -> DiscoveredService {
+        if let parsed = BridgeURLParser.parse(ip) {
+            return try await discoverAtURL(parsed)
+        }
         for port in UInt16(7860)...UInt16(7869) {
             let url = URL(string: "http://\(ip):\(port)/status")!
             var request = URLRequest(url: url)
-            request.timeoutInterval = 3
+            request.timeoutInterval = 8
             do {
                 let (_, response) = try await URLSession.shared.data(for: request)
                 if let http = response as? HTTPURLResponse, http.statusCode == 200 {
@@ -86,6 +89,22 @@ final class BonjourDiscovery: ObservableObject {
             }
         }
         throw DiscoveryError.noServiceFound
+    }
+
+    /// Reachability check for a full remote URL (Tailscale hostname, tunnel URL, etc.).
+    func discoverAtURL(_ parsed: BridgeURLParser.ParsedBridge) async throws -> DiscoveredService {
+        var request = URLRequest(url: BridgeURLParser.statusURL(for: parsed.baseURL))
+        request.timeoutInterval = 12
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw DiscoveryError.noServiceFound
+        }
+        return DiscoveredService(
+            name: parsed.displayHost,
+            host: parsed.displayHost,
+            port: parsed.port,
+            machineName: parsed.displayHost
+        )
     }
 
     /// Tries to connect to localhost:7860-7869 directly.

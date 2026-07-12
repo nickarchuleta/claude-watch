@@ -1,8 +1,19 @@
 import SwiftUI
 import WatchConnectivity
 
+enum WatchConnectionMode: String {
+    case direct
+    case iphoneRelay
+}
+
 class WatchViewState: ObservableObject {
     static let shared = WatchViewState()
+
+    @Published var connectionMode: WatchConnectionMode = {
+        WatchConnectionMode(
+            rawValue: UserDefaults.standard.string(forKey: "watch_connection_mode") ?? ""
+        ) ?? .iphoneRelay
+    }()
 
     @Published var isPaired: Bool = false
     @Published var sessionState: SessionState = .disconnected
@@ -22,12 +33,20 @@ class WatchViewState: ObservableObject {
     }
 
     private let bridge = WatchBridgeClient.shared
+    private let relay = WatchRelayService.shared
     private let maxLines = 200
     private var pollTimer: Timer?
     private var lastEventId: Int = 0
     private var sseTask: URLSessionDataTask?
 
     private init() {
+        setupRelayHandlers()
+
+        if connectionMode == .iphoneRelay {
+            relay.start()
+            return
+        }
+
         if bridge.isPaired {
             Task {
                 let reachable = await verifyBridge()
@@ -41,6 +60,65 @@ class WatchViewState: ObservableObject {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - iPhone relay (no same-WiFi requirement)
+
+    func connectViaIPhone() {
+        connectionMode = .iphoneRelay
+        UserDefaults.standard.set(WatchConnectionMode.iphoneRelay.rawValue, forKey: "watch_connection_mode")
+        bridge.unpair()
+        stopEventStream()
+        relay.start()
+        appendLine(TerminalLine(text: "Waiting for iPhone relay…", type: .system))
+    }
+
+    func connectDirectToMac() {
+        connectionMode = .direct
+        UserDefaults.standard.set(WatchConnectionMode.direct.rawValue, forKey: "watch_connection_mode")
+        relay.stop()
+        isPaired = false
+    }
+
+    private func setupRelayHandlers() {
+        relay.onConnected = { [weak self] in
+            guard let self else { return }
+            self.isPaired = true
+            self.sessionState.connection = .connected
+            self.sessionState.transportMode = .iphoneRelay
+            self.appendLine(TerminalLine(text: "Connected via iPhone", type: .system))
+        }
+
+        relay.onDisconnected = { [weak self] in
+            guard let self else { return }
+            if self.connectionMode == .iphoneRelay {
+                self.isPaired = false
+                self.sessionState = .disconnected
+            }
+        }
+
+        relay.onTerminalLines = { [weak self] lines in
+            lines.forEach { self?.appendLine($0, sessionId: $0.sessionId) }
+        }
+
+        relay.onApproval = { [weak self] request in
+            self?.pendingApproval = request
+            if let pid = request.permissionId {
+                UserDefaults.standard.set(pid, forKey: "watch_pending_permission")
+            }
+            HapticManager.approvalNeeded()
+        }
+
+        relay.onSessionState = { [weak self] state in
+            self?.sessionState = state
+            if state.relayReady && state.connection == .connected {
+                self?.isPaired = true
+            }
+        }
+
+        relay.onSessions = { [weak self] sessions in
+            self?.sessions = sessions
         }
     }
 
@@ -402,8 +480,23 @@ class WatchViewState: ObservableObject {
 
     func respondToPermissionWithOption(_ optionLabel: String, index: Int) {
         let approval = pendingApproval ?? activeSession?.pendingApproval
-        guard let permissionId = approval?.permissionId ?? UserDefaults.standard.string(forKey: "watch_pending_permission"),
-              let baseURL = bridge.baseURL, let token = bridge.token else { return }
+        guard let permissionId = approval?.permissionId ?? UserDefaults.standard.string(forKey: "watch_pending_permission") else { return }
+
+        if connectionMode == .iphoneRelay {
+            relay.sendApprovalOption(
+                permissionId: permissionId,
+                optionLabel: optionLabel,
+                index: index,
+                optionCount: approval?.options.count ?? 1,
+                question: approval?.question
+            )
+            pendingApproval = nil
+            appendLine(TerminalLine(text: "→ \(optionLabel)", type: .command), sessionId: activeSession?.id)
+            UserDefaults.standard.removeObject(forKey: "watch_pending_permission")
+            return
+        }
+
+        guard let baseURL = bridge.baseURL, let token = bridge.token else { return }
 
         let sessionId = activeSession?.id
         pendingApproval = nil
@@ -448,8 +541,28 @@ class WatchViewState: ObservableObject {
 
     func respondToPermission(approved: Bool) {
         let approval = pendingApproval ?? activeSession?.pendingApproval
-        guard let permissionId = approval?.permissionId ?? UserDefaults.standard.string(forKey: "watch_pending_permission"),
-              let baseURL = bridge.baseURL, let token = bridge.token else { return }
+        guard let permissionId = approval?.permissionId ?? UserDefaults.standard.string(forKey: "watch_pending_permission") else { return }
+
+        if connectionMode == .iphoneRelay {
+            let label = approved ? "Yes" : "No"
+            let index = approved ? 0 : max((approval?.options.count ?? 2) - 1, 0)
+            relay.sendApprovalOption(
+                permissionId: permissionId,
+                optionLabel: label,
+                index: index,
+                optionCount: approval?.options.count ?? 2,
+                question: approval?.question
+            )
+            pendingApproval = nil
+            appendLine(
+                TerminalLine(text: approved ? "✓ Approved" : "✗ Denied", type: approved ? .output : .error),
+                sessionId: activeSession?.id
+            )
+            UserDefaults.standard.removeObject(forKey: "watch_pending_permission")
+            return
+        }
+
+        guard let baseURL = bridge.baseURL, let token = bridge.token else { return }
 
         let sessionId = activeSession?.id
         pendingApproval = nil
@@ -510,6 +623,11 @@ class WatchViewState: ObservableObject {
         let sid = sessionId ?? activeSession?.id
         appendLine(TerminalLine(text: "> \(text)", type: .command), sessionId: sid)
         appendLine(TerminalLine(text: "", type: .thinking), sessionId: sid)
+
+        if connectionMode == .iphoneRelay {
+            relay.sendVoiceCommand(text)
+            return
+        }
 
         guard let baseURL = bridge.baseURL, let token = bridge.token else { return }
 

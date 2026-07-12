@@ -24,10 +24,15 @@ struct SessionState: Codable {
     var filesChanged: Int
     var linesAdded: Int
     var transportMode: TransportMode
+    /// iPhone has an active bridge pairing — watch can relay through WCSession (no same WiFi).
+    var iphoneRelayAvailable: Bool?
+
+    var relayReady: Bool { iphoneRelayAvailable ?? false }
 
     enum TransportMode: String, Codable {
         case lan
         case remote
+        case iphoneRelay
     }
 
     static var disconnected: SessionState {
@@ -40,7 +45,8 @@ struct SessionState: Codable {
             elapsedSeconds: 0,
             filesChanged: 0,
             linesAdded: 0,
-            transportMode: .lan
+            transportMode: .lan,
+            iphoneRelayAvailable: false
         )
     }
 }

@@ -9,6 +9,7 @@ struct PairingView: View {
     @State private var code: String = ""
     @State private var ipAddress: String = ""
     @State private var showManualIP: Bool = false
+    @State private var showRemoteURL: Bool = false
     @FocusState private var isCodeFocused: Bool
     @FocusState private var isIPFocused: Bool
     @State private var shakeOffset: CGFloat = 0
@@ -28,7 +29,7 @@ struct PairingView: View {
                 mascotIcon
                 titleSection
 
-                if showManualIP {
+                if showManualIP || showRemoteURL {
                     ipEntrySection
                 }
 
@@ -54,7 +55,9 @@ struct PairingView: View {
                 .font(.system(size: 28, weight: .bold))
                 .foregroundStyle(Color.claudeOrange)
 
-            Text(showManualIP
+            Text(showRemoteURL
+                 ? "Enter remote bridge URL + pairing code"
+                 : showManualIP
                  ? "Enter your Mac's IP and the pairing code"
                  : "Enter the pairing code from your Mac")
                 .font(.system(size: 15))
@@ -65,8 +68,10 @@ struct PairingView: View {
 
     private var ipEntrySection: some View {
         HStack(spacing: 8) {
-            TextField("192.168.1.x", text: $ipAddress)
-                .keyboardType(.decimalPad)
+            TextField(showRemoteURL ? "mac.tail123.ts.net" : "192.168.1.x", text: $ipAddress)
+                .keyboardType(showRemoteURL ? .URL : .decimalPad)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
                 .font(.system(size: 17, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.white)
                 .tint(Color.claudeOrange)
@@ -146,20 +151,32 @@ struct PairingView: View {
 
     private var bottomSection: some View {
         VStack(spacing: 12) {
-            if !showManualIP {
+            if !showManualIP && !showRemoteURL {
                 Button {
                     withAnimation {
                         showManualIP = true
                         isIPFocused = true
                     }
                 } label: {
-                    Text("Can't connect? Enter IP manually")
+                    Text("Can't connect? Enter LAN IP")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.claudeOrange)
+                }
+
+                Button {
+                    withAnimation {
+                        showRemoteURL = true
+                        showManualIP = true
+                        isIPFocused = true
+                    }
+                } label: {
+                    Text("Remote (Tailscale / tunnel URL)")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.claudeOrange)
                 }
             }
 
-            Text("Run `node server.js` in the bridge folder to start")
+            Text("Mac: node server.js  ·  Remote: skill/start-remote.sh tailscale")
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(Color.subtleText)
                 .multilineTextAlignment(.center)
@@ -203,11 +220,17 @@ struct PairingView: View {
                     let ip = ipAddress.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !ip.isEmpty else {
                         await MainActor.run {
-                            showPairingError("Please enter your Mac's IP address.")
+                            showPairingError(showRemoteURL
+                                ? "Please enter the remote bridge URL."
+                                : "Please enter your Mac's IP address.")
                         }
                         return
                     }
-                    try await relayService.pairWithIP(ip, code: code)
+                    if showRemoteURL {
+                        try await relayService.pairWithURL(ip, code: code)
+                    } else {
+                        try await relayService.pairWithIP(ip, code: code)
+                    }
                 } else {
                     try await relayService.pair(code: code)
                 }

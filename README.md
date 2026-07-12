@@ -55,7 +55,8 @@ A SwiftUI iOS app that:
 
 ### 3. watchOS App
 A SwiftUI watchOS app that:
-- Connects directly to the bridge over Wi-Fi (Bonjour or manual IP entry)
+- **Default: relays through iPhone** via WCSession (no same-WiFi requirement)
+- Optional: connects directly to the bridge over Wi-Fi (Bonjour or manual IP / Tailscale host)
 - Shows live terminal output (Read, Edit, Bash, Grep operations)
 - Displays permission prompts with all options as scrollable buttons
 - Supports voice command input via watchOS dictation
@@ -66,12 +67,22 @@ A SwiftUI watchOS app that:
 ### Prerequisites
 - macOS with Node.js 18+
 - Xcode 16+ with watchOS SDK
-- Apple Watch on the same Wi-Fi as your Mac
 - Claude Code CLI installed
+- **Remote / anywhere setup:** [Tailscale](https://tailscale.com/download) on Mac + iPhone (recommended)
 
-### Apple Watch Wi-Fi Setup
-1. Make sure your Apple Watch is connected to the **same Wi-Fi network** as the Mac running your Claude Code session
-2. On your Apple Watch, go to **Settings > Wi-Fi > your network** and turn **Private Wi-Fi Address** to **Off** — this is required for Bonjour/mDNS discovery to work reliably on the local network
+### Connection modes
+
+| Mode | Same WiFi? | Setup |
+|------|------------|-------|
+| **Via iPhone** (default on watch) | No | Pair iPhone to Mac (LAN or Tailscale URL); watch → **Connect via iPhone** |
+| LAN direct | Yes | Bonjour or `192.168.x.x` on iPhone; optional direct LAN on watch |
+| Remote URL | No | `./skill/start-remote.sh tailscale` on Mac; pair iPhone with Tailscale hostname |
+
+See **[REMOTE.md](REMOTE.md)** for full remote setup.
+
+### Apple Watch Wi-Fi Setup (LAN direct mode only)
+1. Same Wi-Fi as Mac only if using **Direct to Mac (LAN)** on the watch
+2. For remote use, prefer **Connect via iPhone** — no watch Wi-Fi config needed
 
 ### 1. Install the bridge
 
@@ -92,9 +103,16 @@ To remove hooks later: `./skill/setup-hooks.sh --remove`
 
 ### 3. Start the bridge server
 
+**LAN only:**
 ```bash
 cd skill/bridge
 node server.js
+```
+
+**Remote (Tailscale — recommended):**
+```bash
+cd skill
+./start-remote.sh tailscale
 ```
 
 You'll see:

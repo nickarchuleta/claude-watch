@@ -45,13 +45,14 @@ struct SettingsView: View {
     private var connectionSection: some View {
         Section {
             Picker("Connection Mode", selection: $connectionMode) {
-                Text("Auto").tag(ConnectionMode.auto)
+                Text("Auto (LAN)").tag(ConnectionMode.auto)
                 Text("LAN Only").tag(ConnectionMode.lanOnly)
+                Text("Remote URL").tag(ConnectionMode.remoteURL)
             }
         } header: {
             Text("Connection")
         } footer: {
-            Text("Auto discovers the bridge via Bonjour on your local network.")
+            Text("Remote URL: pair with Tailscale hostname or tunnel URL on the pairing screen. Apple Watch uses iPhone relay — no same WiFi needed.")
         }
     }
 
@@ -109,6 +110,7 @@ struct SettingsView: View {
 enum ConnectionMode: String {
     case auto
     case lanOnly
+    case remoteURL
 }
 
 // MARK: - Preview

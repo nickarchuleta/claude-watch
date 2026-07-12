@@ -114,10 +114,27 @@ final class RelayService: ObservableObject {
     /// Pairs using a manual IP address (fallback when Bonjour fails on real devices).
     func pairWithIP(_ ip: String, code: String) async throws {
         print("[RelayService] Manual IP pair: \(ip), code: \(code)")
+        try await pairWithRemoteAddress(ip, code: code, transportMode: .lan)
+    }
 
-        let service = try await discovery.discoverAtIP(ip)
-        bridgeClient.configure(host: service.host, port: service.port)
+    /// Pairs using a remote URL — Tailscale hostname, 100.x IP, Cloudflare tunnel, etc.
+    /// iPhone can be on cellular; no same-WiFi requirement.
+    func pairWithURL(_ address: String, code: String) async throws {
+        print("[RelayService] Remote URL pair: \(address)")
+        try await pairWithRemoteAddress(address, code: code, transportMode: .remote)
+    }
 
+    private func pairWithRemoteAddress(
+        _ address: String,
+        code: String,
+        transportMode: SessionState.TransportMode
+    ) async throws {
+        guard let parsed = BridgeURLParser.parse(address) else {
+            throw BridgeClient.BridgeError.networkError
+        }
+
+        let service = try await discovery.discoverAtURL(parsed)
+        bridgeClient.configure(parsed: parsed)
         try await bridgeClient.pair(code: code)
 
         machineName = service.machineName
@@ -125,14 +142,16 @@ final class RelayService: ObservableObject {
         isPaired = true
         connectionState = .connected
 
+        UserDefaults.standard.set(parsed.baseURL.absoluteString, forKey: "bridge_url")
         UserDefaults.standard.set(service.host, forKey: "bridge_host")
         UserDefaults.standard.set(Int(service.port), forKey: "bridge_port")
         UserDefaults.standard.set(service.machineName, forKey: "paired_machine_name")
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "last_connected")
+        UserDefaults.standard.set(transportMode.rawValue, forKey: "bridge_transport_mode")
 
         startEventStream()
         startElapsedTimer()
-        updateWatchState()
+        updateWatchState(transportMode: transportMode)
     }
 
     /// Removes pairing and disconnects.
@@ -347,7 +366,13 @@ final class RelayService: ObservableObject {
         appendToSession(line, sessionId: sessionId)
 
         // Forward to watch
-        let watchRequest = ApprovalRequest(toolName: toolName, actionSummary: desc, question: question, options: options)
+        let watchRequest = ApprovalRequest(
+            permissionId: permissionId,
+            toolName: toolName,
+            actionSummary: desc,
+            question: question,
+            options: options
+        )
         let message = WatchMessage.approvalRequestMessage(watchRequest)
         sessionManager.send(message)
 
@@ -622,7 +647,6 @@ final class RelayService: ObservableObject {
             }
 
         case .approvalResponse(let response):
-            // Forward approval response to bridge
             let key = "pending_permission_\(response.requestId.uuidString)"
             if let permissionId = UserDefaults.standard.string(forKey: key) {
                 Task {
@@ -634,12 +658,36 @@ final class RelayService: ObservableObject {
                 UserDefaults.standard.removeObject(forKey: key)
             }
 
+        case .approvalOptionResponse(let response):
+            Task {
+                if response.question != nil {
+                    try? await bridgeClient.respondToApprovalWithOption(
+                        requestId: response.permissionId,
+                        optionLabel: response.optionLabel,
+                        index: response.optionIndex
+                    )
+                } else if response.optionLabel.lowercased().contains("allow all")
+                    || response.optionLabel.lowercased().contains("don't ask") {
+                    try? await bridgeClient.respondToApprovalAllowAll(requestId: response.permissionId)
+                } else {
+                    let approved = response.optionIndex != response.optionCount - 1
+                    try? await bridgeClient.respondToApproval(
+                        requestId: response.permissionId,
+                        allow: approved
+                    )
+                }
+            }
+
         default:
             break
         }
     }
 
-    private func updateWatchState() {
+    private func updateWatchState(transportMode: SessionState.TransportMode? = nil) {
+        let modeRaw = UserDefaults.standard.string(forKey: "bridge_transport_mode")
+        let resolvedMode = transportMode
+            ?? SessionState.TransportMode(rawValue: modeRaw ?? "") ?? .lan
+
         let state = SessionState(
             connection: connectionState,
             activity: currentActivity,
@@ -649,10 +697,19 @@ final class RelayService: ObservableObject {
             elapsedSeconds: elapsedSeconds,
             filesChanged: 0,
             linesAdded: 0,
-            transportMode: .lan
+            transportMode: resolvedMode,
+            iphoneRelayAvailable: isPaired
         )
 
         sessionManager.updateApplicationContext(with: state)
+
+        if isPaired {
+            let status = WatchMessage.ConnectionStatusMessage(
+                state: connectionState,
+                machineName: machineName
+            )
+            sessionManager.send(.connectionStatus(status))
+        }
     }
 
     private var currentActivity: SessionActivity {
