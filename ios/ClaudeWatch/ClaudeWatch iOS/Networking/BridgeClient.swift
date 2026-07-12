@@ -136,6 +136,17 @@ final class BridgeClient {
     func spawnSession(agent: String, cwd: String? = nil) async throws -> String {
         var body: [String: Any] = ["spawn": agent]
         if let cwd { body["cwd"] = cwd }
+        return try await postSpawn(body: body)
+    }
+
+    /// Spawn a wrist profile: `money` (Pi/trading) or `life` (Claude/ops)
+    func spawnProfile(_ profile: String, cwd: String? = nil) async throws -> String {
+        var body: [String: Any] = ["spawnProfile": profile]
+        if let cwd { body["cwd"] = cwd }
+        return try await postSpawn(body: body)
+    }
+
+    private func postSpawn(body: [String: Any]) async throws -> String {
         guard let baseURL, let token else { throw BridgeError.networkError }
         let url = baseURL.appendingPathComponent("command")
         var request = URLRequest(url: url)

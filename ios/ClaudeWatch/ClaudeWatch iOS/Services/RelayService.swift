@@ -486,7 +486,7 @@ final class RelayService: ObservableObject {
                 if let idx = sessions.firstIndex(where: { $0.id == sid }) {
                     sessions[idx].activity = .running
                 } else {
-                    let agentType = AgentType(rawValue: agent ?? "claude") ?? .claude
+                    let agentType = AgentType(fromBridge: agent)
                     sessions.append(AgentSession(
                         id: sid, agent: agentType, cwd: cwd,
                         folderName: folderName, activity: .running
@@ -516,7 +516,11 @@ final class RelayService: ObservableObject {
         let toolOutput = json["tool_output"] as? String
         let sessionId = json["sessionId"] as? String
         let source = json["source"] as? String ?? "claude"
-        let prefix = source == "codex" ? "[codex] " : ""
+        let prefix: String = switch source {
+        case "codex": "[codex] "
+        case "pi": "[pi] "
+        default: ""
+        }
 
         // Format like a real terminal: show what Claude did and the result
         var lines: [TerminalLine] = []

@@ -10,6 +10,10 @@ struct AgentIcon: View {
             ClaudeMascot(size: size)
         case .codex:
             CodexLogo(size: size)
+        case .pi:
+            Text("π")
+                .font(.system(size: size * 0.75, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.claudeOrange)
         }
     }
 }

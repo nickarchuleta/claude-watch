@@ -6,6 +6,16 @@ import path from "node:path";
 import { execSync } from "node:child_process";
 import { spawn as childSpawn } from "node:child_process";
 import { Bonjour } from "bonjour-service";
+import {
+  availableAgentsList as registryAgents,
+  getAgent,
+  getProfile,
+  listProfiles,
+  buildSpawnArgs,
+  buildResumeArgs,
+  buildExecCommand,
+} from "./agents.js";
+import { createPiMonitor } from "./pi-monitor.js";
 
 // ---------------------------------------------------------------------------
 // Logging (must be defined before use)
@@ -119,6 +129,7 @@ const codexSyntheticPermissions = new Map();
 const codexSyntheticPermissionBySession = new Map();
 const codexLogState = { offset: 0, remainder: "", initialized: false };
 let codexMonitorInterval = null;
+let piMonitor = null;
 
 // Bonjour
 let bonjourInstance = null;
@@ -193,10 +204,7 @@ function readBody(req) {
 }
 
 function availableAgentsList() {
-  const agents = [];
-  if (CLAUDE_BIN) agents.push("claude");
-  if (CODEX_BIN) agents.push("codex");
-  return agents;
+  return registryAgents();
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +263,8 @@ function formatSseMessage(entry) {
 // ---------------------------------------------------------------------------
 
 function spawnInteractiveProcess(agent, cwd, args = []) {
-  const bin = agent === "codex" ? CODEX_BIN : CLAUDE_BIN;
+  const spec = getAgent(agent);
+  const bin = spec?.binary;
   if (!bin) {
     return null;
   }
@@ -303,13 +312,13 @@ function bindPtyProcess(slot, proc) {
   });
 }
 
-function spawnSession(agent, cwd) {
+function spawnSession(agent, cwd, extraArgs = []) {
   const sessionId = crypto.randomUUID();
   const folderName = path.basename(cwd) || cwd;
 
   log("info", `Spawning ${agent} session ${sessionId} in PTY (cwd: ${cwd})`);
 
-  const proc = spawnInteractiveProcess(agent, cwd);
+  const proc = spawnInteractiveProcess(agent, cwd, extraArgs);
   if (!proc) {
     const msg = `Cannot spawn ${agent}: binary not found`;
     log("error", msg);
@@ -317,7 +326,7 @@ function spawnSession(agent, cwd) {
     return null;
   }
 
-  log("info", `Using binary: ${agent === "codex" ? CODEX_BIN : CLAUDE_BIN}`);
+  log("info", `Using binary: ${getAgent(agent)?.binary} (${agent})`);
 
   const slot = {
     id: sessionId,
@@ -340,9 +349,8 @@ function spawnSession(agent, cwd) {
 function attachPtyToSession(slot) {
   if (slot.ptyProcess) return slot.ptyProcess;
 
-  const args = slot.agent === "codex"
-    ? ["resume", slot.id, "--no-alt-screen"]
-    : [];
+  const resume = buildResumeArgs(slot.agent, slot.id);
+  const args = resume?.args || [];
 
   const proc = spawnInteractiveProcess(slot.agent, slot.cwd, args);
   if (!proc) return null;
@@ -457,28 +465,28 @@ function readFileSlice(filePath, start, length) {
   }
 }
 
-function touchExternalSession(sessionId, cwd, createdAt) {
+function touchExternalSession(sessionId, cwd, createdAt, agent = "codex") {
   const resolvedCwd = cwd || process.env.HOME || process.cwd();
   const folderName = path.basename(resolvedCwd) || resolvedCwd;
   const existing = sessions.get(sessionId);
 
   if (existing) {
     const wasEnded = existing.state !== "running";
-    existing.agent = "codex";
+    existing.agent = agent;
     existing.cwd = resolvedCwd;
     existing.folderName = folderName;
     existing.state = "running";
     existing.createdAt = createdAt || existing.createdAt || Date.now();
     if (wasEnded) {
-      pushSseEvent("session", { state: "running", agent: "codex", cwd: resolvedCwd, folderName }, sessionId);
-      log("info", `Revived Codex session ${sessionId} (${folderName}) from local session data`);
+      pushSseEvent("session", { state: "running", agent, cwd: resolvedCwd, folderName }, sessionId);
+      log("info", `Revived ${agent} session ${sessionId} (${folderName}) from local session data`);
     }
     return existing;
   }
 
   const slot = {
     id: sessionId,
-    agent: "codex",
+    agent,
     cwd: resolvedCwd,
     folderName,
     ptyProcess: null,
@@ -486,8 +494,8 @@ function touchExternalSession(sessionId, cwd, createdAt) {
     createdAt: createdAt || Date.now(),
   };
   sessions.set(sessionId, slot);
-  pushSseEvent("session", { state: "running", agent: "codex", cwd: resolvedCwd, folderName }, sessionId);
-  log("info", `Detected Codex session ${sessionId} (${folderName}) from local session data`);
+  pushSseEvent("session", { state: "running", agent, cwd: resolvedCwd, folderName }, sessionId);
+  log("info", `Detected ${agent} session ${sessionId} (${folderName}) from local session data`);
   return slot;
 }
 
@@ -979,6 +987,7 @@ async function handlePair(req, res) {
     bridgeId: BRIDGE_ID,
     sessionId: BRIDGE_ID, // backward compat
     availableAgents: availableAgentsList(),
+    profiles: listProfiles(),
     sessions: getSessionsSnapshot(),
   });
 }
@@ -1011,14 +1020,43 @@ async function handleCommand(req, res) {
     optionIndex,
   } = body;
 
+  // --- Spawn from wrist profile (money | life | custom) ---
+  if (body.spawnProfile) {
+    const profile = getProfile(body.spawnProfile);
+    if (!profile) {
+      return jsonResponse(res, 400, {
+        error: `Unknown profile: ${body.spawnProfile}`,
+        profiles: listProfiles(),
+      });
+    }
+    const agentId = profile.agent || "claude";
+    const cwd = body.cwd || profile.cwd || process.env.HOME || process.cwd();
+    const spawn = buildSpawnArgs(agentId);
+    if (!spawn) {
+      return jsonResponse(res, 500, { error: `Agent not available: ${agentId}` });
+    }
+    const newId = spawnSession(agentId, cwd, spawn.args);
+    if (!newId) {
+      return jsonResponse(res, 500, { error: `Failed to spawn profile ${body.spawnProfile}` });
+    }
+    return jsonResponse(res, 200, {
+      ok: true,
+      sessionId: newId,
+      agent: agentId,
+      profile: body.spawnProfile,
+      label: profile.label,
+    });
+  }
+
   // --- Spawn a new session ---
   if (spawnRequest) {
-    const validAgents = ["claude", "codex"];
+    const validAgents = availableAgentsList();
     if (!validAgents.includes(spawnRequest)) {
       return jsonResponse(res, 400, { error: `Invalid agent: ${spawnRequest}. Use: ${validAgents.join(", ")}` });
     }
     const cwd = body.cwd || process.argv[2] || process.env.HOME || process.cwd();
-    const newId = spawnSession(spawnRequest, cwd);
+    const spawn = buildSpawnArgs(spawnRequest);
+    const newId = spawnSession(spawnRequest, cwd, spawn?.args || []);
     if (!newId) {
       return jsonResponse(res, 500, { error: `Failed to spawn ${spawnRequest}` });
     }
@@ -1076,14 +1114,13 @@ async function handleCommand(req, res) {
           return jsonResponse(res, 400, { error: "Empty command" });
         }
 
-        const bin = targetSession.agent === "codex" ? CODEX_BIN : CLAUDE_BIN;
-        if (!bin) {
+        const exec = buildExecCommand(targetSession.agent, promptText);
+        if (!exec?.binary) {
           return jsonResponse(res, 500, { error: `No binary found for ${targetSession.agent}` });
         }
 
-        const args = targetSession.agent === "codex"
-          ? ["exec", promptText]
-          : ["-p", promptText, "--continue"];
+        const bin = exec.binary;
+        const args = exec.args;
 
         log("info", `Running ${targetSession.agent} prompt in ${targetSession.cwd}: "${promptText.slice(0, 80)}"`);
 
@@ -1127,7 +1164,8 @@ async function handleCommand(req, res) {
       // Auto-spawn a new session
       const requestedAgent = agent || "claude";
       const cwd = body.cwd || process.argv[2] || process.env.HOME || process.cwd();
-      const newId = spawnSession(requestedAgent, cwd);
+      const spawn = buildSpawnArgs(requestedAgent);
+      const newId = spawnSession(requestedAgent, cwd, spawn?.args || []);
       if (!newId) {
         return jsonResponse(res, 500, { error: `Failed to spawn ${requestedAgent}` });
       }
@@ -1393,6 +1431,7 @@ function handleStatus(_req, res) {
     sessionId: BRIDGE_ID, // backward compat
     state: bridgeState,
     availableAgents: availableAgentsList(),
+    profiles: listProfiles(),
     sessions: getSessionsSnapshot(),
     sseClients: sseClients.size,
     pendingPermissions: pendingPermissions.size + codexSyntheticPermissions.size,
@@ -1495,10 +1534,10 @@ async function startServer() {
 
   log("info", `Bonjour advertising _claude-watch._tcp on port ${boundPort}`);
   startCodexMonitor();
+  piMonitor = createPiMonitor({ log, pushSseEvent, touchExternalSession, endExternalSession });
+  piMonitor.start();
 
-  const agents = [];
-  if (CLAUDE_BIN) agents.push("Claude");
-  if (CODEX_BIN) agents.push("Codex");
+  const agents = availableAgentsList().map((id) => getAgent(id)?.label || id);
   log("info", `Bridge ready. Available agents: ${agents.join(", ") || "none"}. Sessions spawn on demand.`);
 
   // Get LAN IP
@@ -1573,6 +1612,7 @@ async function startServer() {
     }
     sessions.clear();
     stopCodexMonitor();
+    if (piMonitor) piMonitor.stop();
 
     if (bonjourService) {
       try { bonjourInstance.unpublishAll(); } catch { /* ignore */ }

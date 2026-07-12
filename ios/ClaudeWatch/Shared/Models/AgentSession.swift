@@ -3,6 +3,11 @@ import Foundation
 enum AgentType: String, Codable {
     case claude
     case codex
+    case pi
+
+    init(fromBridge value: String?) {
+        self = AgentType(rawValue: value ?? "claude") ?? .claude
+    }
 }
 
 struct AgentSession: Identifiable, Codable, Equatable {

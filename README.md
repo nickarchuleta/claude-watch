@@ -80,6 +80,14 @@ A SwiftUI watchOS app that:
 
 See **[REMOTE.md](REMOTE.md)** for full remote setup.
 
+### Dual-watch command center (cellular dumb-phone wrists)
+
+See **[DUAL-WATCH.md](DUAL-WATCH.md)** — finance wrist (Pi + OpenRouter) + life ops wrist (Claude), iPhone relay, no same WiFi.
+
+**Agents:** `claude`, `codex`, `pi` (auto-detected). Pi uses your `~/.pi/agent/settings.json` defaults (`openrouter/free`). Custom CLIs via `~/.agent-watch/agents.json`.
+
+**Wrist profiles:** `money` → Pi trading cwd · `life` → Claude vault cwd. Spawn: `./skill/start-wrist.sh money`
+
 ### Apple Watch Wi-Fi Setup (LAN direct mode only)
 1. Same Wi-Fi as Mac only if using **Direct to Mac (LAN)** on the watch
 2. For remote use, prefer **Connect via iPhone** — no watch Wi-Fi config needed

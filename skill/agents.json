@@ -1,0 +1,17 @@
+{
+  "agents": {},
+  "profiles": {
+    "money": {
+      "label": "Money Printer",
+      "agent": "pi",
+      "cwd": "~/my-pi-projects",
+      "description": "Trading agents, backtests, token waterfalls — Pi + OpenRouter free/cheap"
+    },
+    "life": {
+      "label": "Life Ops",
+      "agent": "claude",
+      "cwd": "~/Documents/Obsidian Vault",
+      "description": "Flights, hotels, bills, appointments, calendar — Claude on vault"
+    }
+  }
+}

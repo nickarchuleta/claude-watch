@@ -300,7 +300,11 @@ class WatchViewState: ObservableObject {
         let toolInput = json["tool_input"] as? [String: Any] ?? [:]
         let source = json["source"] as? String ?? "claude"
         let toolOutput = json["tool_output"] as? String
-        let prefix = source == "codex" ? "[codex] " : ""
+        let prefix: String = switch source {
+        case "codex": "[codex] "
+        case "pi": "[pi] "
+        default: ""
+        }
 
         switch toolName {
         case "Bash":
@@ -447,7 +451,7 @@ class WatchViewState: ObservableObject {
                     sessions[idx].activity = .running
                 } else {
                     // New session appeared
-                    let agentType = AgentType(rawValue: agent ?? "claude") ?? .claude
+                    let agentType = AgentType(fromBridge: agent)
                     let newSession = AgentSession(
                         id: sid, agent: agentType, cwd: cwd,
                         folderName: folderName, activity: .running
